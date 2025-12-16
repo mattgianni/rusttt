@@ -1,6 +1,9 @@
 [package]
 name = "ttt"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11.8"
+log = "0.4.29"

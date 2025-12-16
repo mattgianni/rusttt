@@ -1,5 +1,5 @@
 use log::{debug, error, trace};
-use ttt::cli::Cli;
+use rusttt::cli::Cli;
 
 fn init_logging(verbosity: u8) {
     use env_logger::Env;
@@ -23,7 +23,7 @@ fn main() {
     trace!("trace logging enabled.");
     debug!("main called with {:?}.", cli);
 
-    if let Err(e) = ttt::run(cli) {
+    if let Err(e) = rusttt::run(cli) {
         error!("{e}");
         std::process::exit(1);
     }

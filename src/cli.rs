@@ -1,7 +1,7 @@
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "ttt", version, about)]
+#[command(name = "rusttt", version, about)]
 pub struct Cli {
     /// Verbose logging (repeatable: -v, -vv)
     #[arg(short, long, action = clap::ArgAction::Count)]

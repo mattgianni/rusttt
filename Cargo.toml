@@ -1,6 +1,7 @@
 [package]
 name = "rusttt"
 version = "0.0.1"
+authors = ["Matthew Gianni"]
 edition = "2024"
 
 [dependencies]

@@ -14,14 +14,17 @@ fn init_logging(verbosity: u8) {
     env_logger::Builder::from_env(Env::default().default_filter_or(level.to_string()))
         .format_timestamp_secs()
         .init();
+
+    trace!("logging enabled with log level {:?}.", level);
 }
 
 fn main() {
     let cli = <Cli as clap::Parser>::parse();
     init_logging(cli.verbose);
-
+    
     trace!("trace logging enabled.");
-    debug!("main called with {:?}.", cli);
+    trace!("main called with {:?}.", cli);
+    debug!("starting rusttt.");
 
     if let Err(e) = rusttt::run(cli) {
         error!("{e}");

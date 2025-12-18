@@ -1,3 +1,3 @@
-# ttt
+# rusttt
 
-A rust basd tic-tac-toe game.
+A Rust, based tic-tac-toe game.

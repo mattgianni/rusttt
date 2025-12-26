@@ -2,31 +2,60 @@
 use crate::cli::Config;
 use crate::error::AppError;
 use crate::ttt::board::Board;
+use crate::ttt::engine::negamax_ab;
+use crate::ttt::player::Player;
 use log::trace;
+
+use rand::rng;
+use rand::seq::IndexedRandom;
+
+#[allow(dead_code)]
+fn rando() {
+    let mut rng = rng();
+
+    let mut board = Board::new();
+    println!("{board}");
+
+    loop {
+        let moves: Vec<u8> = board.legal_moves().collect();
+
+        if moves.is_empty() {
+            break;
+        }
+
+        println!("{moves:?}");
+
+        if let Some(sq) = moves.choose(&mut rng) {
+            println!("playing {sq}");
+            board.play_move(*sq);
+            println!("{board}");
+        } else {
+            break;
+        }
+    }
+}
 
 pub fn play(cfg: &Config) -> Result<String, AppError> {
     trace!("play({:?}) called.", cfg);
 
+    // rando();
     let mut board = Board::new();
+    board.x = 0b100_000_001;
+    board.o = 0b000_010_010;
+    board.turn = Player::X;
 
-    board.play_move(6)?;
-    board.play_move(5)?;
-    board.play_move(3)?;
-    board.play_move(1)?;
+    let (mut alpha, beta, mut best) = (i32::MIN + 1000, i32::MAX - 1000, i32::MIN + 1000);
+    for sq in board.legal_moves() {
+        board.play_move(sq);
 
-    print!("{board}");
-    println!("Player {}'s turn to move.", board.whose_turn());
+        let score = -negamax_ab(&board, 9, -beta, -alpha);
+        best = best.max(score);
+        alpha = alpha.max(score);
 
-    println!("Current winner: {:?}", board.winner());
-    board.play_move(9)?;
+        println!("{board}Score: {score}");
 
-    print!("{board}");
-    println!("Current winner: {:?}", board.winner());
-
-    // unplay last move
-    board.unplay_move(9)?;
-    print!("{board}");
-    println!("Current winner: {:?}", board.winner());
+        board.unplay_move(sq);
+    }
 
     Ok(format!("processed: {:?}", cfg))
 }

@@ -1,184 +1,245 @@
-use crate::AppError;
+use crate::ttt::bititer::BitIter;
+use crate::ttt::engine::eval;
+use crate::ttt::player::Player;
+
 use log::trace;
 use std::fmt::Display;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Player {
-    X,
-    O,
-}
+pub const LINES: [u16; 8] = [
+    0b000_000_111,
+    0b000_111_000,
+    0b111_000_000, // rows
+    0b001_001_001,
+    0b010_010_010,
+    0b100_100_100, // cols
+    0b100_010_001,
+    0b001_010_100, // diags
+];
+pub const CENTER: u16 = 1 << 4;
+pub const CORNERS: u16 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 8);
 
-impl Display for Player {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Player::X => write!(f, "X"),
-            Player::O => write!(f, "O"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum BoardState {
-    Open,
-    Draw,
-    Win(Player),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SquareState {
-    Empty,
-    Filled(Player),
-}
-
-impl Display for SquareState {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "."),
-            Self::Filled(player) => write!(f, "{player}"),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct Board {
-    squares: [SquareState; 9],
-    move_number: u8,
+    pub x: u16,
+    pub o: u16,
+    pub turn: Player,
 }
 
 impl Board {
     pub fn new() -> Board {
-        trace!("Board::new() called.");
+        trace!("new() called.");
         Board {
-            squares: [SquareState::Empty; 9],
-            move_number: 0,
+            x: 0,
+            o: 0,
+            turn: Player::X,
         }
     }
 
-    // pub fn col_iter(&self, c: u8) -> impl Iterator<Item = &SquareState> {
-    //     assert!(c < 3);
-    //     let c = c as usize;
-    //     self.squares[c * 3..(c * 3 + 3)].iter()
-    // }
-
-    // pub fn row_iter(&self, r: u8) -> impl Iterator<Item = &SquareState> {
-    //     assert!(r < 3);
-    //     let r = r as usize;
-    //     self.squares[r..].iter().step_by(3)
-    // }
-
-    // pub fn fdiag_iter(&self) -> impl Iterator<Item = &SquareState> {
-    //     self.squares[0..].iter().step_by(4)
-    // }
-
-    // pub fn bdiag_iter(&self) -> impl Iterator<Item = &SquareState> {
-    //     self.squares[2..=6].iter().step_by(2)
-    // }
-
-    pub fn lines(&self) -> impl Iterator<Item = [&SquareState; 3]> {
-        trace!("lines() called.");
-        const LINES: [[usize; 3]; 8] = [
-            [0, 1, 2],
-            [3, 4, 5],
-            [6, 7, 8],
-            [0, 3, 6],
-            [1, 4, 7],
-            [2, 5, 8],
-            [0, 4, 8],
-            [2, 4, 6],
-        ];
-        LINES.into_iter().map(|idx| idx.map(|i| &self.squares[i]))
+    pub fn eval(&self) -> i32 {
+        trace!("eval() called.");
+        eval(self.x, self.o)
     }
 
+    pub fn get(&self, sq: u8) -> Option<Player> {
+        trace!("get({sq}) called.");
+        assert!(sq < 9);
+        if self.x & (1 << sq) != 0 {
+            Some(Player::X)
+        } else if self.o & (1 << sq) != 0 {
+            Some(Player::O)
+        } else {
+            None
+        }
+    }
+
+    pub fn set(&mut self, sq: u8, player: Option<Player>) {
+        trace!("set({sq}, {player:?}) called.");
+        assert!(sq < 9);
+
+        match player {
+            Some(Player::X) => self.x |= 1u16 << sq,
+            Some(Player::O) => self.o |= 1u16 << sq,
+            None => {
+                self.x &= !(1u16 << sq);
+                self.o &= !(1u16 << sq);
+            }
+        }
+    }
+
+    #[inline]
     pub fn winner(&self) -> Option<Player> {
         trace!("winner() called.");
-
-        self.lines()
-            .filter_map(|line| {
-                if line[0] == line[1] && line[1] == line[2] {
-                    match *line[0] {
-                        SquareState::Filled(player) => Some(player),
-                        SquareState::Empty => None, // all the square empty
-                    }
-                } else {
-                    None
-                }
-            })
-            .next()
-    }
-
-    pub fn whose_turn(&self) -> Player {
-        trace!("whose_turn called().");
-        if self.move_number % 2 == 0 {
-            Player::X
-        } else {
-            Player::O
+        for &m in &LINES {
+            if self.x & m == m {
+                return Some(Player::X);
+            }
+            if self.o & m == m {
+                return Some(Player::O);
+            }
         }
+        None
     }
 
-    pub fn play_move(&mut self, square: u8) -> Result<(), AppError> {
-        trace!("play_move({square}) called.");
-        assert!(square >= 1 && square <= 9);
-        let sqidx = (square - 1) as usize;
+    #[inline]
+    pub fn play_move(&mut self, sq: u8) {
+        trace!("play_move({sq}) called.");
+        assert!(sq < 9);
+        assert!(self.get(sq) == None);
 
-        if self.squares[sqidx] != SquareState::Empty {
-            trace!(
-                "returning error in play_move({square}) - attempt to move into a filled square!"
-            );
-            Err(AppError::Msg(
-                "error: attempt to play a move on a filled square!".to_string(),
-            ))
-        } else {
-            self.squares[sqidx] = SquareState::Filled(self.whose_turn());
-            trace!("play_move incrementing move_number");
-            self.move_number += 1;
-            Ok(())
-        }
+        self.set(sq, Some(self.turn));
+        self.turn = self.turn.other();
     }
 
-    pub fn unplay_move(&mut self, square: u8) -> Result<(), AppError> {
-        trace!("unplay_move({square}) called.");
-        assert!(square >= 1 && square <= 9);
-        let sqidx = (square - 1) as usize;
+    #[inline]
+    pub fn unplay_move(&mut self, sq: u8) {
+        trace!("unplay_move({sq}) called.");
+        assert!(sq < 9);
+        assert!(self.get(sq) != None);
 
-        // can't unplay an empty square!
-        if self.squares[sqidx] == SquareState::Empty {
-            trace!("returning error in unplay_move({square}) - attempt to unmove an empty square!");
-            return Err(AppError::Msg(
-                "error: attempt to unmove an empty square!".to_string(),
-            ));
-        };
+        self.set(sq, None);
+        self.turn = self.turn.other();
+    }
 
-        // can't unplay someone else's move!
-        if self.squares[sqidx] == SquareState::Filled(self.whose_turn()) {
-            trace!("returning error in unplay_move({square}) - attempt to unmove out of turn!");
-            return Err(AppError::Msg(
-                "error: attempt to unmove out of turn!".to_string(),
-            ));
-        };
+    #[inline]
+    pub fn occupied(&self) -> u16 {
+        self.x | self.o
+    }
 
-        // should be okay to unmove now
-        self.squares[sqidx] = SquareState::Empty;
-        trace!("play_move decrementing move_number");
-        self.move_number -= 1;
+    #[inline]
+    pub fn empty(&self) -> u16 {
+        !self.occupied() & 0x1FF // 9 squares
+    }
 
-        Ok(())
+    #[inline]
+    pub fn legal_moves(&self) -> BitIter {
+        trace!("legal_moves() called.");
+        BitIter { bb: self.empty() }
     }
 }
 
 impl Display for Board {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        trace!("fmt(&Board, &formatter) called. (display)");
-        for (i, sq) in self.squares.iter().enumerate() {
-            match sq {
-                SquareState::Empty => write!(f, "{}", i + 1)?,
-                _ => write!(f, "{sq}")?,
+        for sq in 0..9u8 {
+            match self.get(sq) {
+                Some(player) => write!(f, "{player}")?,
+                None => write!(f, "{sq}")?,
             }
-            if (i + 1) % 3 == 0 {
-                writeln!(f)?
-            } else {
-                write!(f, " ")?
+
+            if (sq + 1) % 3 == 0 {
+                writeln!(f)?;
             }
         }
         Ok(())
+
+        // writeln!(f, "eval: {}\n", eval(self.x, self.o))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn check_board_new() {
+        let board = Board::new();
+        assert_eq!(board.o, 0u16);
+        assert_eq!(board.x, 0u16);
+        assert_eq!(board.turn, Player::X);
+    }
+
+    #[test]
+    fn check_board_get() {
+        let mut board = Board::new();
+
+        assert_eq!(board.get(4), None);
+        board.x = 1 << 4 | 1 | 1 << 8;
+        board.o = 1 << 5 | 1 << 3;
+
+        assert_eq!(board.get(4), Some(Player::X));
+        assert_eq!(board.get(5), Some(Player::O));
+        assert_eq!(board.get(0), Some(Player::X));
+        assert_eq!(board.get(7), None);
+    }
+
+    #[test]
+    fn check_board_set() {
+        let mut board = Board::new();
+
+        board.set(4, Some(Player::X));
+        board.set(0, Some(Player::X));
+        board.set(8, Some(Player::X));
+
+        board.set(5, Some(Player::O));
+        board.set(3, Some(Player::O));
+        board.set(2, Some(Player::O));
+        board.set(2, None);
+
+        assert_eq!(board.x, 1u16 << 4 | 1u16 << 0 | 1u16 << 8);
+        assert_eq!(board.o, 1 << 5 | 1 << 3);
+    }
+
+    #[test]
+    fn check_play_move() {
+        let mut board = Board::new();
+
+        board.play_move(4);
+        assert_eq!(board.get(4), Some(Player::X));
+        assert_eq!(board.x, (1 << 4) as u16);
+        assert_eq!(board.o, 0u16);
+        assert_eq!(board.turn, Player::O);
+
+        board.play_move(3);
+        assert_eq!(board.get(3), Some(Player::O));
+        assert_eq!(board.x, (1 << 4) as u16);
+        assert_eq!(board.o, (1 << 3) as u16);
+        assert_eq!(board.turn, Player::X);
+    }
+
+    #[test]
+    fn check_board_winner() {
+        let mut board = Board::new();
+
+        assert_eq!(board.winner(), None);
+
+        board.play_move(4);
+        assert_eq!(board.winner(), None);
+        board.play_move(5);
+        assert_eq!(board.winner(), None);
+
+        board.play_move(0);
+        assert_eq!(board.winner(), None);
+        board.play_move(3);
+        assert_eq!(board.winner(), None);
+
+        board.play_move(8);
+        assert_eq!(board.winner(), Some(Player::X));
+    }
+
+    #[test]
+    fn check_eval_minor() {
+        let mut board = Board::new();
+        board.x = 0b000_000_011;
+        board.o = 0b000_010_000;
+        assert!(board.eval() > 10); // white should be winning modestly
+
+        board.x = 0b000_000_011;
+        board.o = 0b000_010_100;
+        assert!(board.eval() < 10); // black should winning slightly
+    }
+
+    #[test]
+    fn check_eval_major() {
+        let mut board = Board::new();
+        board.x = 0b001_000_101;
+        board.o = 0b100_010_000;
+        assert!(board.eval() > 30); // white should be crush
+    }
+
+    #[test]
+    fn check_eval_win() {
+        let mut board = Board::new();
+        board.x = 0b001_001_101;
+        board.o = 0b100_010_010;
+        assert!(board.eval() > 900_000); // white should be crush
     }
 }

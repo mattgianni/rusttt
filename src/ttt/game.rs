@@ -59,3 +59,22 @@ pub fn play(cfg: &Config) -> Result<String, AppError> {
 
     Ok(format!("processed: {:?}", cfg))
 }
+
+#[derive(Debug)]
+pub struct Game {
+    pub board: Board,
+}
+
+impl Default for Game {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Game {
+    pub fn new() -> Self {
+        Self {
+            board: Board::new(),
+        }
+    }
+}

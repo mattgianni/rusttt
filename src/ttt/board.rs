@@ -35,6 +35,12 @@ impl Board {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.x = 0;
+        self.o = 0;
+        self.turn = Player::X;
+    }
+
     pub fn eval(&self) -> i32 {
         trace!("eval() called.");
         eval(self.x, self.o)

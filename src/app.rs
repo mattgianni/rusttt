@@ -1,23 +1,27 @@
-#![allow(unused)]
+// #![allow(unused)]
 
-use crate::{cli::Config, error::AppError, ttt::board::Board, ttt::game::Game};
+use crate::{
+    cli::Config,
+    error::AppError,
+    ttt::{board::Board, engine::negamax_ab, game::Game, player::Player},
+};
 use log::trace;
 
-use std::io;
+use std::{io, time::Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::Stylize,
     symbols::border,
-    text::{Line, Text},
-    widgets::{Block, Gauge, Paragraph, Widget},
+    text::Line,
+    widgets::{Block, Paragraph, Widget},
 };
 
-use rand::rng;
 use rand::seq::IndexedRandom;
+use rand::{Rng, rng};
 
 pub fn run(cfg: Config) -> Result<(), AppError> {
     trace!("run({:?}) called.", &cfg);
@@ -31,10 +35,50 @@ pub fn run(cfg: Config) -> Result<(), AppError> {
     Ok(())
 }
 
+fn max_by_key_random<'a, T, K: Ord>(
+    iter: impl Iterator<Item = &'a T>,
+    mut key_fn: impl FnMut(&T) -> K,
+) -> Option<&'a T> {
+    let mut rng = rand::rng();
+
+    let mut best: Option<&T> = None;
+    let mut best_key: Option<K> = None;
+    let mut ties = 0;
+
+    for item in iter {
+        let key = key_fn(item);
+
+        match &best_key {
+            None => {
+                best = Some(item);
+                best_key = Some(key);
+                ties = 1;
+            }
+            Some(bk) if key > *bk => {
+                best = Some(item);
+                best_key = Some(key);
+                ties = 1;
+            }
+            Some(bk) if key == *bk => {
+                ties += 1;
+                if rng.random_range(0..ties) == 0 {
+                    best = Some(item);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    best
+}
+
 #[derive(Debug, Default)]
 pub struct App {
     pub exit: bool,
     pub game: Game,
+    pub games_played: u128,
+    pub x_wins: u128,
+    pub o_wins: u128,
 }
 
 impl App {
@@ -42,6 +86,9 @@ impl App {
         Self {
             exit: false,
             game: Game::new(),
+            games_played: 0,
+            x_wins: 0,
+            o_wins: 0,
         }
     }
 
@@ -70,11 +117,84 @@ impl App {
         Ok(())
     }
 
+    fn reset_game(&mut self) {
+        if self.game.board.legal_moves_safe().next() == None {
+            if self.game.board.winner() == Some(Player::X) {
+                self.x_wins += 1;
+            } else if self.game.board.winner() == Some(Player::O) {
+                self.o_wins += 1;
+            }
+            self.games_played += 1;
+        }
+        self.game.board.clear();
+    }
+
+    fn play_best(&mut self) {
+        if let Some((sq, _score)) = self.best_move() {
+            self.game.board.play_move(sq);
+        }
+    }
+
+    fn best_move(&self) -> Option<(u8, i32)> {
+        if self.game.board.legal_moves_safe().next() == None {
+            return None;
+        }
+
+        let moves = self.evaluate_moves();
+        // let (sq, score) = moves
+        //     .iter()
+        //     .max_by_key(|(_sq, score)| *score)
+        //     .copied()
+        //     .unwrap();
+
+        let (sq, score) = max_by_key_random(moves.iter(), |(_sq, score)| *score)
+            .copied()
+            .unwrap();
+
+        Some((sq, score))
+    }
+
+    fn evaluate_moves(&self) -> Vec<(u8, i32)> {
+        let (alpha, beta) = (i32::MIN + 1000, i32::MAX - 1000);
+        let mut board = self.game.board.clone();
+        let mut moves: Vec<(u8, i32)> = Vec::new();
+
+        for sq in board.legal_moves() {
+            board.play_move(sq);
+
+            let score = -negamax_ab(&board, 9, -beta, -alpha);
+            // alpha = alpha.max(score);
+            moves.push((sq, score));
+
+            board.unplay_move(sq);
+        }
+
+        moves
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // handle quit right away
         match key_event.code {
             KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => self.exit(),
-            KeyCode::Char('r') | KeyCode::Char('R') => self.game.board.play_random(),
             _ => {}
+        }
+
+        // reset the board if no legal moves exist, otherwise handle keys normally
+        if self.game.board.legal_moves_safe().next() == None {
+            self.reset_game();
+        } else {
+            match key_event.code {
+                KeyCode::Char('r') | KeyCode::Char('R') => self.game.board.play_random(),
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let sq = c.to_digit(10).unwrap() as u8;
+
+                    if sq >= 1 && self.game.board.get(sq - 1) == None {
+                        self.game.board.play_move(sq - 1);
+                    };
+                }
+                KeyCode::Char('b') | KeyCode::Char('B') => self.play_best(),
+                _ => {}
+            }
         }
     }
 
@@ -86,7 +206,7 @@ impl App {
 impl Board {
     fn play_random(&mut self) {
         let mut rng = rng();
-        let moves: Vec<u8> = self.legal_moves().collect();
+        let moves: Vec<u8> = self.legal_moves_safe().collect();
         if !moves.is_empty()
             && let Some(sq) = moves.choose(&mut rng)
         {
@@ -148,12 +268,48 @@ impl Widget for &App {
             .title(Line::from(" Stats "))
             .border_set(border::ROUNDED);
 
-        Paragraph::new("game_stats_area")
-            .centered()
+        let legal: Vec<u8> = board.legal_moves_safe().collect();
+        let winner = match board.winner() {
+            Some(player) => player.to_string(),
+            None => "None".to_string(),
+        };
+
+        let legal_line = Line::from(vec![
+            format!(" Legal: ").into(),
+            format!("{:?}", legal).bold(),
+        ]);
+
+        let winner_line = Line::from(vec![
+            format!(" Winner: ").into(),
+            format!("{}", winner).bold(),
+        ]);
+
+        let best_line = Line::from(vec![
+            format!(" Best: ").into(),
+            format!("{:?}", self.best_move()).bold(),
+        ]);
+
+        let start_time = Instant::now();
+        let move_eval = self.evaluate_moves();
+        let elapsed = start_time.elapsed().as_millis();
+        let eval_line = Line::from(vec![
+            format!(" Eval[{}ms]: ", elapsed).into(),
+            format!("{:?}", move_eval).bold(),
+        ]);
+        // let elapsed_line = Line::from(vec![
+        //     format!(" Elapsed: ").into(),
+        //     format!("{}ms", elapsed).bold(),
+        // ]);
+
+        Paragraph::new(vec![legal_line, winner_line, best_line, eval_line])
             .block(block)
             .render(game_stats_area, buf);
 
         let instructions = Line::from(vec![
+            " Make move ".into(),
+            "<[1-9]>".blue().bold(),
+            " Best move ".into(),
+            "<B>".blue().bold(),
             " Random move ".into(),
             "<R>".blue().bold(),
             " Quit ".into(),
@@ -162,12 +318,23 @@ impl Widget for &App {
         .centered();
 
         let block = Block::bordered()
-            .title(Line::from(" Bottom "))
+            .title(Line::from(" History "))
             .title_bottom(instructions)
             .border_set(border::ROUNDED);
 
-        Paragraph::new("bottom_area")
-            .centered()
+        let wins_line = Line::from(vec![
+            format!(" Wins - X: ").into(),
+            format!("{}", self.x_wins).bold(),
+            format!(" O: ").into(),
+            format!("{}", self.o_wins).bold(),
+        ]);
+
+        let games_played_line = Line::from(vec![
+            format!(" Games played: ").into(),
+            format!("{}", self.games_played).bold(),
+        ]);
+
+        Paragraph::new(vec![wins_line, games_played_line])
             .block(block)
             .render(bottom_area, buf);
     }

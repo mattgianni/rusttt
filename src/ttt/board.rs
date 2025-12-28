@@ -121,6 +121,16 @@ impl Board {
         trace!("legal_moves() called.");
         BitIter { bb: self.empty() }
     }
+
+    #[inline]
+    pub fn legal_moves_safe(&self) -> BitIter {
+        trace!("legal_moves_safe() called.");
+        if let Some(_) = self.winner() {
+            BitIter { bb: 0 }
+        } else {
+            BitIter { bb: self.empty() }
+        }
+    }
 }
 
 impl Display for Board {

@@ -20,8 +20,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Widget},
 };
 
-use rand::seq::IndexedRandom;
-use rand::{Rng, rng};
+use rand::Rng;
 
 pub fn run(cfg: Config) -> Result<(), AppError> {
     trace!("run({:?}) called.", &cfg);
@@ -72,6 +71,7 @@ fn max_by_key_random<'a, T, K: Ord>(
     best
 }
 
+type GameHistory = Vec<(String, Vec<u8>)>;
 #[derive(Debug, Default)]
 pub struct App {
     pub exit: bool,
@@ -79,6 +79,7 @@ pub struct App {
     pub games_played: u128,
     pub x_wins: u128,
     pub o_wins: u128,
+    pub game_history: GameHistory,
 }
 
 impl App {
@@ -89,6 +90,7 @@ impl App {
             games_played: 0,
             x_wins: 0,
             o_wins: 0,
+            game_history: Vec::<(String, Vec<u8>)>::new(),
         }
     }
 
@@ -121,17 +123,35 @@ impl App {
         if self.game.board.legal_moves_safe().next() == None {
             if self.game.board.winner() == Some(Player::X) {
                 self.x_wins += 1;
+                self.game_history
+                    .push((String::from("X Wins"), self.game.moves.clone()));
             } else if self.game.board.winner() == Some(Player::O) {
                 self.o_wins += 1;
+                self.game_history
+                    .push((String::from("O Wins"), self.game.moves.clone()));
+            } else {
+                self.game_history
+                    .push((String::from("Draw"), self.game.moves.clone()));
             }
             self.games_played += 1;
+        } else {
+            self.game_history
+                .push((String::from("aborted"), self.game.moves.clone()));
         }
-        self.game.board.clear();
+        self.game.clear();
+    }
+
+    fn full_reset(&mut self) {
+        self.reset_game();
+        self.o_wins = 0;
+        self.x_wins = 0;
+        self.games_played = 0;
+        self.game_history.clear();
     }
 
     fn play_best(&mut self) {
         if let Some((sq, _score)) = self.best_move() {
-            self.game.board.play_move(sq);
+            self.game.play_move(sq);
         }
     }
 
@@ -141,12 +161,6 @@ impl App {
         }
 
         let moves = self.evaluate_moves();
-        // let (sq, score) = moves
-        //     .iter()
-        //     .max_by_key(|(_sq, score)| *score)
-        //     .copied()
-        //     .unwrap();
-
         let (sq, score) = max_by_key_random(moves.iter(), |(_sq, score)| *score)
             .copied()
             .unwrap();
@@ -184,15 +198,17 @@ impl App {
             self.reset_game();
         } else {
             match key_event.code {
-                KeyCode::Char('r') | KeyCode::Char('R') => self.game.board.play_random(),
+                KeyCode::Char('r') | KeyCode::Char('R') => self.game.play_random(),
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let sq = c.to_digit(10).unwrap() as u8;
 
                     if sq >= 1 && self.game.board.get(sq - 1) == None {
-                        self.game.board.play_move(sq - 1);
+                        self.game.play_move(sq - 1);
                     };
                 }
                 KeyCode::Char('b') | KeyCode::Char('B') => self.play_best(),
+                KeyCode::Char('c') | KeyCode::Char('C') => self.reset_game(),
+                KeyCode::Char('f') | KeyCode::Char('F') => self.full_reset(),
                 _ => {}
             }
         }
@@ -204,17 +220,17 @@ impl App {
 }
 
 impl Board {
-    fn play_random(&mut self) {
-        let mut rng = rng();
-        let moves: Vec<u8> = self.legal_moves_safe().collect();
-        if !moves.is_empty()
-            && let Some(sq) = moves.choose(&mut rng)
-        {
-            self.play_move(*sq);
-        } else {
-            self.clear();
-        }
-    }
+    // fn play_random(&mut self) {
+    //     let mut rng = rng();
+    //     let moves: Vec<u8> = self.legal_moves_safe().collect();
+    //     if !moves.is_empty()
+    //         && let Some(sq) = moves.choose(&mut rng)
+    //     {
+    //         self.play_move(*sq);
+    //     } else {
+    //         self.clear();
+    //     }
+    // }
 
     fn row_line(self, n: u8) -> String {
         assert!(n < 3);
@@ -274,6 +290,11 @@ impl Widget for &App {
             None => "None".to_string(),
         };
 
+        let turn_line = Line::from(vec![
+            format!(" Turn: ").into(),
+            format!("{} to move", board.turn).bold(),
+        ]);
+
         let legal_line = Line::from(vec![
             format!(" Legal: ").into(),
             format!("{:?}", legal).bold(),
@@ -291,9 +312,16 @@ impl Widget for &App {
 
         let start_time = Instant::now();
         let move_eval = self.evaluate_moves();
-        let elapsed = start_time.elapsed().as_millis();
+        let elapsed = start_time.elapsed();
+        let elapsed_str = match elapsed.as_nanos() {
+            nano if nano > 1_200_000_000 => format!("{} s", elapsed.as_secs()),
+            nano if nano > 1_200_000 => format!("{} ms", elapsed.as_millis()),
+            nano if nano > 2_500 => format!("{} \u{00B5}s", elapsed.as_micros()),
+            nano => format!("{} ns", nano),
+        };
+
         let eval_line = Line::from(vec![
-            format!(" Eval[{}ms]: ", elapsed).into(),
+            format!(" Eval[{}]: ", elapsed_str).into(),
             format!("{:?}", move_eval).bold(),
         ]);
         // let elapsed_line = Line::from(vec![
@@ -301,9 +329,15 @@ impl Widget for &App {
         //     format!("{}ms", elapsed).bold(),
         // ]);
 
-        Paragraph::new(vec![legal_line, winner_line, best_line, eval_line])
-            .block(block)
-            .render(game_stats_area, buf);
+        Paragraph::new(vec![
+            turn_line,
+            legal_line,
+            winner_line,
+            best_line,
+            eval_line,
+        ])
+        .block(block)
+        .render(game_stats_area, buf);
 
         let instructions = Line::from(vec![
             " Make move ".into(),
@@ -312,6 +346,10 @@ impl Widget for &App {
             "<B>".blue().bold(),
             " Random move ".into(),
             "<R>".blue().bold(),
+            " Clear ".into(),
+            "<C> ".blue().bold(),
+            " Full reset ".into(),
+            "<F> ".blue().bold(),
             " Quit ".into(),
             "<Q> ".blue().bold(),
         ])
@@ -334,7 +372,23 @@ impl Widget for &App {
             format!("{}", self.games_played).bold(),
         ]);
 
-        Paragraph::new(vec![wins_line, games_played_line])
+        // let mut hist_lines = vec![wins_line, games_played_line];
+        // for game in self.game_history {
+        //     let game_line = Line::from(vec![format!(" - {:?}", game).into()]);
+        //     hist_lines.push(game_line);
+        // }
+
+        let mut game_lines: Vec<Line<'_>> = self
+            .game_history
+            .iter()
+            .rev()
+            .map(|g| Line::from(format!(" {} - {:?}", g.0, g.1)))
+            .collect();
+
+        let mut bottom_text = vec![wins_line, games_played_line];
+        bottom_text.append(&mut game_lines);
+
+        Paragraph::new(bottom_text)
             .block(block)
             .render(bottom_area, buf);
     }

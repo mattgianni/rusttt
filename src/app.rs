@@ -143,7 +143,7 @@ impl App {
                     break;
                 }
             }
-            thread::sleep(Duration::from_millis(30));
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -291,7 +291,6 @@ impl App {
 }
 
 impl Board {
-
     fn row_line(self, n: u8) -> String {
         assert!(n < 3);
         let squares: Vec<String> = (0..9)

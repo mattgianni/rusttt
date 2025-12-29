@@ -40,48 +40,6 @@ pub fn eval(x: u16, o: u16) -> i32 {
     s
 }
 
-#[allow(dead_code)]
-#[inline]
-pub fn negamax(board: &Board, depth: u8) -> i32 {
-    let mut position = board.clone();
-
-    // check for win
-    if let Some(winner) = position.winner() {
-        if winner == board.turn {
-            return WIN;
-        } else {
-            return -WIN;
-        }
-    };
-
-    // check for draw
-    if position.empty() == 0 {
-        return 0;
-    };
-
-    let mut best = i32::MIN;
-
-    if depth == 0 {
-        if position.turn == Player::X {
-            return position.eval();
-        } else {
-            return -position.eval();
-        }
-    } else {
-        for sq in position.legal_moves() {
-            position.play_move(sq);
-            let negmax = -negamax(&position, depth - 1);
-            if negmax > best {
-                best = negmax;
-            }
-            position.unplay_move(sq);
-        }
-    }
-
-    best
-}
-
-#[allow(dead_code)]
 #[inline]
 pub fn negamax_ab(board: &Board, depth: u8, mut alpha: i32, beta: i32) -> i32 {
     let mut position = board.clone();
@@ -126,15 +84,13 @@ pub fn negamax_ab(board: &Board, depth: u8, mut alpha: i32, beta: i32) -> i32 {
 
 #[cfg(test)]
 mod test {
-    use log::debug;
-
     use super::*;
     use crate::ttt::board::Board;
 
     #[test]
     fn eval_start() {
         let board = Board::new();
-        let score = negamax(&board, 2);
-        debug!("score: {score}");
+        let score = negamax_ab(&board, 10, -(i32::MAX - 100), i32::MAX - 100);
+        assert_eq!(score, 0);
     }
 }

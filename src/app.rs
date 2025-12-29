@@ -1,15 +1,22 @@
-// #![allow(unused)]
-
 use crate::{
     cli::Config,
     error::AppError,
     ttt::{board::Board, engine::negamax_ab, game::Game, player::Player},
 };
-use log::trace;
+use log::{debug, trace};
 
-use std::{io, time::Instant};
+use std::{
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
@@ -24,7 +31,6 @@ use rand::Rng;
 
 pub fn run(cfg: Config) -> Result<(), AppError> {
     trace!("run({:?}) called.", &cfg);
-    // let _ = crate::ttt::game::play(&cfg)?;
 
     let mut app = App::new();
     let mut terminal = ratatui::init();
@@ -71,6 +77,11 @@ fn max_by_key_random<'a, T, K: Ord>(
     best
 }
 
+pub enum AppMessage {
+    KeyEvent(crossterm::event::KeyEvent),
+    Random(u8),
+}
+
 type GameHistory = Vec<(String, Vec<u8>)>;
 #[derive(Debug, Default)]
 pub struct App {
@@ -80,6 +91,7 @@ pub struct App {
     pub x_wins: u128,
     pub o_wins: u128,
     pub game_history: GameHistory,
+    pub autoplay_enabled: Arc<AtomicBool>,
 }
 
 impl App {
@@ -91,13 +103,29 @@ impl App {
             x_wins: 0,
             o_wins: 0,
             game_history: Vec::<(String, Vec<u8>)>::new(),
+            autoplay_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        let (tx, rx) = mpsc::channel::<AppMessage>();
+
+        let input_tx = tx.clone();
+        thread::spawn(move || {
+            debug!("spawning event handler.");
+            Self::background_event_handler(input_tx);
+        });
+
+        let rand_tx = tx.clone();
+        let autoplay_enabled = Arc::clone(&self.autoplay_enabled);
+        thread::spawn(move || {
+            debug!("spawning background rand gen.");
+            Self::background_rand(rand_tx, autoplay_enabled);
+        });
+
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
-            self.handle_events()?;
+            self.handle_events(&rx)?;
         }
         Ok(())
     }
@@ -106,17 +134,88 @@ impl App {
         frame.render_widget(self, frame.area());
     }
 
-    /// updates the application's state based on user input
-    fn handle_events(&mut self) -> io::Result<()> {
-        match event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+    fn background_rand(tx: mpsc::Sender<AppMessage>, autoplay_enabled: Arc<AtomicBool>) {
+        let mut rng = rand::rng();
+        loop {
+            let r = rng.random_range(0..9) as u8;
+            if autoplay_enabled.load(Ordering::Relaxed) {
+                if tx.send(AppMessage::Random(r)).is_err() {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(30));
+        }
+    }
+
+    fn background_event_handler(tx: mpsc::Sender<AppMessage>) {
+        loop {
+            match crossterm::event::read() {
+                Ok(crossterm::event::Event::Key(key_event)) => {
+                    if tx.send(AppMessage::KeyEvent(key_event)).is_err() {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("event::read() failed: {err}");
+                    break;
+                }
+            }
+        }
+    }
+
+    fn handle_events(&mut self, rx: &mpsc::Receiver<AppMessage>) -> io::Result<()> {
+        match rx.recv() {
+            Ok(AppMessage::KeyEvent(key_event)) if key_event.kind == KeyEventKind::Press => {
                 self.handle_key_event(key_event)
             }
+            Ok(AppMessage::Random(n)) => self.handle_random(n),
             _ => {}
         };
         Ok(())
+    }
+
+    fn handle_random(&mut self, n: u8) {
+        let _n = n;
+        if self.game.board.legal_moves_safe().next() == None {
+            self.reset_game();
+        } else {
+            self.play_best();
+        }
+    }
+
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // handle quit right away
+        match key_event.code {
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => self.exit(),
+            _ => {}
+        }
+
+        // reset the board if no legal moves exist, otherwise handle keys normally
+        if self.game.board.legal_moves_safe().next() == None {
+            self.reset_game();
+        } else {
+            match key_event.code {
+                KeyCode::Char('r') | KeyCode::Char('R') => self.game.play_random(),
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let sq = c.to_digit(10).unwrap() as u8;
+
+                    if sq >= 1 && self.game.board.get(sq - 1) == None {
+                        self.game.play_move(sq - 1);
+                    };
+                }
+                KeyCode::Char('b') | KeyCode::Char('B') => self.play_best(),
+                KeyCode::Char('c') | KeyCode::Char('C') => self.reset_game(),
+                KeyCode::Char('f') | KeyCode::Char('F') => self.full_reset(),
+                KeyCode::Char('a') | KeyCode::Char('A') => self.toggle_auto_play(),
+                _ => {}
+            }
+        }
+    }
+
+    fn toggle_auto_play(&mut self) {
+        let new_value = !self.autoplay_enabled.load(Ordering::Relaxed);
+        self.autoplay_enabled.store(new_value, Ordering::Relaxed);
     }
 
     fn reset_game(&mut self) {
@@ -186,51 +285,12 @@ impl App {
         moves
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        // handle quit right away
-        match key_event.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => self.exit(),
-            _ => {}
-        }
-
-        // reset the board if no legal moves exist, otherwise handle keys normally
-        if self.game.board.legal_moves_safe().next() == None {
-            self.reset_game();
-        } else {
-            match key_event.code {
-                KeyCode::Char('r') | KeyCode::Char('R') => self.game.play_random(),
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    let sq = c.to_digit(10).unwrap() as u8;
-
-                    if sq >= 1 && self.game.board.get(sq - 1) == None {
-                        self.game.play_move(sq - 1);
-                    };
-                }
-                KeyCode::Char('b') | KeyCode::Char('B') => self.play_best(),
-                KeyCode::Char('c') | KeyCode::Char('C') => self.reset_game(),
-                KeyCode::Char('f') | KeyCode::Char('F') => self.full_reset(),
-                _ => {}
-            }
-        }
-    }
-
     fn exit(&mut self) {
         self.exit = true;
     }
 }
 
 impl Board {
-    // fn play_random(&mut self) {
-    //     let mut rng = rng();
-    //     let moves: Vec<u8> = self.legal_moves_safe().collect();
-    //     if !moves.is_empty()
-    //         && let Some(sq) = moves.choose(&mut rng)
-    //     {
-    //         self.play_move(*sq);
-    //     } else {
-    //         self.clear();
-    //     }
-    // }
 
     fn row_line(self, n: u8) -> String {
         assert!(n < 3);
@@ -324,10 +384,6 @@ impl Widget for &App {
             format!(" Eval[{}]: ", elapsed_str).into(),
             format!("{:?}", move_eval).bold(),
         ]);
-        // let elapsed_line = Line::from(vec![
-        //     format!(" Elapsed: ").into(),
-        //     format!("{}ms", elapsed).bold(),
-        // ]);
 
         Paragraph::new(vec![
             turn_line,
@@ -346,6 +402,8 @@ impl Widget for &App {
             "<B>".blue().bold(),
             " Random move ".into(),
             "<R>".blue().bold(),
+            " Auto move ".into(),
+            "<A>".blue().bold(),
             " Clear ".into(),
             "<C> ".blue().bold(),
             " Full reset ".into(),
@@ -371,12 +429,6 @@ impl Widget for &App {
             format!(" Games played: ").into(),
             format!("{}", self.games_played).bold(),
         ]);
-
-        // let mut hist_lines = vec![wins_line, games_played_line];
-        // for game in self.game_history {
-        //     let game_line = Line::from(vec![format!(" - {:?}", game).into()]);
-        //     hist_lines.push(game_line);
-        // }
 
         let mut game_lines: Vec<Line<'_>> = self
             .game_history

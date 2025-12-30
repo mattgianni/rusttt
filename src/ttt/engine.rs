@@ -3,6 +3,7 @@ use crate::ttt::{
     player::Player,
 };
 use log::trace;
+use rayon::prelude::*;
 
 const WIN: i32 = 1_000_000;
 
@@ -80,6 +81,52 @@ pub fn negamax_ab(board: &Board, depth: u8, mut alpha: i32, beta: i32) -> i32 {
     }
 
     best
+}
+
+pub fn evaluate_moves(board: &Board) -> Vec<(u8, i32)> {
+    match board.legal_moves().count() {
+        9 => board.legal_moves().map(|m| (m, 0i32)).collect(),
+        mc if mc < 5 => ser_evaluate_moves(board),
+        _ => par_evaluate_moves(board),
+    }
+}
+
+pub fn ser_evaluate_moves(board: &Board) -> Vec<(u8, i32)> {
+    let mut board = board.clone();
+
+    let (alpha, beta) = (i32::MIN + 1000, i32::MAX - 1000);
+    let mut moves: Vec<(u8, i32)> = Vec::new();
+
+    for sq in board.legal_moves() {
+        board.play_move(sq);
+
+        let score = -negamax_ab(&board, 9, -beta, -alpha);
+        moves.push((sq, score));
+
+        board.unplay_move(sq);
+    }
+
+    moves
+}
+
+pub fn par_evaluate_moves(board: &Board) -> Vec<(u8, i32)> {
+    let (alpha, beta) = (i32::MIN + 1000, i32::MAX - 1000);
+    let board = board.clone();
+    let mut moves: Vec<(u8, i32)> = Vec::new();
+
+    let squares: Vec<u8> = board.legal_moves().collect();
+
+    squares
+        .par_iter()
+        .map(|&sq| {
+            let mut board = board;
+            board.play_move(sq);
+            let score = -negamax_ab(&board, 9, -beta, -alpha);
+            (sq, score)
+        })
+        .collect_into_vec(&mut moves);
+
+    moves
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use crate::{
     cli::Config,
     error::AppError,
-    ttt::{board::Board, engine::negamax_ab, game::Game, player::Player},
+    ttt::{board::Board, engine::evaluate_moves, game::Game, player::Player},
 };
 use log::{debug, trace};
 
@@ -143,7 +143,7 @@ impl App {
                     break;
                 }
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -259,30 +259,12 @@ impl App {
             return None;
         }
 
-        let moves = self.evaluate_moves();
+        let moves = evaluate_moves(&self.game.board);
         let (sq, score) = max_by_key_random(moves.iter(), |(_sq, score)| *score)
             .copied()
             .unwrap();
 
         Some((sq, score))
-    }
-
-    fn evaluate_moves(&self) -> Vec<(u8, i32)> {
-        let (alpha, beta) = (i32::MIN + 1000, i32::MAX - 1000);
-        let mut board = self.game.board.clone();
-        let mut moves: Vec<(u8, i32)> = Vec::new();
-
-        for sq in board.legal_moves() {
-            board.play_move(sq);
-
-            let score = -negamax_ab(&board, 9, -beta, -alpha);
-            // alpha = alpha.max(score);
-            moves.push((sq, score));
-
-            board.unplay_move(sq);
-        }
-
-        moves
     }
 
     fn exit(&mut self) {
@@ -352,16 +334,13 @@ impl Widget for &App {
         let turn_line = Line::from(vec![
             format!(" Turn: ").into(),
             format!("{} to move", board.turn).bold(),
+            format!(" Winner: ").into(),
+            format!("{}", winner).bold(),
         ]);
 
         let legal_line = Line::from(vec![
             format!(" Legal: ").into(),
             format!("{:?}", legal).bold(),
-        ]);
-
-        let winner_line = Line::from(vec![
-            format!(" Winner: ").into(),
-            format!("{}", winner).bold(),
         ]);
 
         let best_line = Line::from(vec![
@@ -370,7 +349,7 @@ impl Widget for &App {
         ]);
 
         let start_time = Instant::now();
-        let move_eval = self.evaluate_moves();
+        let move_eval = evaluate_moves(&self.game.board);
         let elapsed = start_time.elapsed();
         let elapsed_str = match elapsed.as_nanos() {
             nano if nano > 1_200_000_000 => format!("{} s", elapsed.as_secs()),
@@ -384,15 +363,9 @@ impl Widget for &App {
             format!("{:?}", move_eval).bold(),
         ]);
 
-        Paragraph::new(vec![
-            turn_line,
-            legal_line,
-            winner_line,
-            best_line,
-            eval_line,
-        ])
-        .block(block)
-        .render(game_stats_area, buf);
+        Paragraph::new(vec![turn_line, legal_line, best_line, eval_line])
+            .block(block)
+            .render(game_stats_area, buf);
 
         let instructions = Line::from(vec![
             " Make move ".into(),
